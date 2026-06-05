@@ -135,19 +135,38 @@ export default function Pipeline() {
     if (staged.length === 0) return;
     setBusy(true);
     try {
+      const existingById = new Map(acctsRef.current.map((a) => [a.id, a]));
+      const pendingUpdates = new Map();
+      const pendingCreates = [];
+
       for (const s of staged) {
         const cleanContacts = s.contacts.filter((c) => c.name.trim() || c.contact.trim());
         const touch = { id: uid("t"), at: new Date(s.lastContact + "T12:00:00").getTime() || Date.now(), source: s.source, stage: s.stage, summary: s.summary, nextAction: s.nextAction, rawText: s.rawText, angles: splitTags(s.anglesText), problems: splitTags(s.problemsText) };
-        const existing = acctsRef.current.find((a) => a.id === s.matchId);
-        if (existing) {
-          const merged = [...existing.contacts];
-          cleanContacts.forEach((c) => { if (c.name && !merged.some((m) => m.name.toLowerCase() === c.name.toLowerCase())) merged.push(c); });
-          const updated = { ...existing, stage: s.stage, dealType: existing.dealType || s.dealType, nextAction: s.nextAction || existing.nextAction, contacts: merged, timeline: [...existing.timeline, touch] };
-          await fetch(`/api/accounts/${existing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(updated) });
-        } else {
-          await fetch("/api/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: s.name || "Untitled", dealType: s.dealType, stage: s.stage, nextAction: s.nextAction, contacts: cleanContacts, timeline: [touch] }) });
+        const existing = s.matchId ? existingById.get(s.matchId) : null;
+
+        if (!existing) {
+          pendingCreates.push({ name: s.name || "Untitled", dealType: s.dealType, stage: s.stage, nextAction: s.nextAction, contacts: cleanContacts, timeline: [touch] });
+          continue;
         }
+
+        const current = pendingUpdates.get(existing.id) || { ...existing, contacts: [...existing.contacts], timeline: [...existing.timeline] };
+        cleanContacts.forEach((c) => {
+          if (c.name && !current.contacts.some((m) => m.name.toLowerCase() === c.name.toLowerCase())) current.contacts.push(c);
+        });
+        current.stage = s.stage;
+        current.dealType = current.dealType || s.dealType;
+        current.nextAction = s.nextAction || current.nextAction;
+        current.timeline.push(touch);
+        pendingUpdates.set(existing.id, current);
       }
+
+      for (const updated of pendingUpdates.values()) {
+        await fetch(`/api/accounts/${updated.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(updated) });
+      }
+      for (const created of pendingCreates) {
+        await fetch("/api/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(created) });
+      }
+
       await refetch();
       flash(`${staged.length} logged`); setStaged([]); setView("dashboard");
     } catch (e) { setErr("Couldn't save — check your connection and try again."); }
