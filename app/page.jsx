@@ -18,6 +18,11 @@ const today = () => new Date().toISOString().slice(0, 10);
 const fmt = (ts) => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 const splitTags = (s) => (s || "").split(",").map((x) => x.trim()).filter(Boolean);
 const uniq = (a) => [...new Set(a)];
+const normalizeTag = (s) => (s || "")
+  .toLowerCase()
+  .replace(/\s+/g, " ")
+  .replace(/^[\s.,;:!?-]+|[\s.,;:!?-]+$/g, "")
+  .trim();
 const lastTouchAt = (a) => Math.max(...a.timeline.map((t) => t.at), a.createdAt || 0);
 const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : 0);
 
@@ -214,11 +219,38 @@ export default function Pipeline() {
 
   const rankStats = (kind) => {
     const map = {};
-    accts.forEach((a) => { const good = ADVANCING.includes(a.stage); uniq(a.timeline.flatMap((t) => t[kind] || [])).forEach((tag) => { map[tag] = map[tag] || { count: 0, adv: 0 }; map[tag].count++; if (good) map[tag].adv++; }); });
-    return Object.entries(map).map(([tag, v]) => ({ tag, ...v })).sort((x, y) => y.count - x.count || y.adv - x.adv).slice(0, 6);
+
+    accts.forEach((a) => {
+      const good = ADVANCING.includes(a.stage);
+      const tagsInDeal = new Set();
+
+      a.timeline.forEach((t) => {
+        const tagsInTouch = new Set();
+        (t[kind] || []).forEach((raw) => {
+          const key = normalizeTag(raw);
+          if (!key) return;
+
+          map[key] = map[key] || { tag: raw.trim(), signalCount: 0, dealCount: 0, advDeals: 0 };
+          tagsInDeal.add(key);
+          if (!tagsInTouch.has(key)) {
+            map[key].signalCount++;
+            tagsInTouch.add(key);
+          }
+        });
+      });
+
+      tagsInDeal.forEach((key) => {
+        map[key].dealCount++;
+        if (good) map[key].advDeals++;
+      });
+    });
+
+    return Object.values(map)
+      .sort((x, y) => y.signalCount - x.signalCount || y.dealCount - x.dealCount || y.advDeals - x.advDeals)
+      .slice(0, 6);
   };
   const angleRank = rankStats("angles"), problemRank = rankStats("problems");
-  const maxA = Math.max(1, ...angleRank.map((r) => r.count)), maxP = Math.max(1, ...problemRank.map((r) => r.count));
+  const maxA = Math.max(1, ...angleRank.map((r) => r.signalCount)), maxP = Math.max(1, ...problemRank.map((r) => r.signalCount));
   const funnelMax = Math.max(1, ...FUNNEL.map((st) => stageCounts[st]));
 
   const exportCSV = () => {
@@ -233,8 +265,8 @@ export default function Pipeline() {
 
   const Rank = ({ r, max, color }) => (
     <div className="lt-rank">
-      <div className="lt-rank-top"><span className="lt-rank-l">{r.tag}</span><span className="lt-rank-r">{r.count} {r.count === 1 ? "deal" : "deals"}{r.adv > 0 && <> · <b>{r.adv} advancing</b></>}</span></div>
-      <div className="lt-track2"><div className="lt-fill2" style={{ width: `${(r.count / max) * 100}%`, background: color }} /></div>
+      <div className="lt-rank-top"><span className="lt-rank-l">{r.tag}</span><span className="lt-rank-r">{r.signalCount} {r.signalCount === 1 ? "signal" : "signals"} · {r.dealCount} {r.dealCount === 1 ? "deal" : "deals"}{r.advDeals > 0 && <> · <b>{r.advDeals} advancing</b></>}</span></div>
+      <div className="lt-track2"><div className="lt-fill2" style={{ width: `${(r.signalCount / max) * 100}%`, background: color }} /></div>
     </div>
   );
 
