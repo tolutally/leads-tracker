@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Upload, Sparkles, Trash2, Download, X, FileText, Image as ImageIcon, Check, Inbox, Clock, CornerDownRight, Plus, Search, LayoutGrid, FileInput, TrendingUp, Target, UserPlus, Table2, AlertTriangle, Activity, Filter, LogOut } from "lucide-react";
+import { Upload, Sparkles, Trash2, Download, X, FileText, Image as ImageIcon, Check, Inbox, Clock, CornerDownRight, Plus, Search, LayoutGrid, FileInput, TrendingUp, Target, UserPlus, Table2, AlertTriangle, Activity, Filter, LogOut, Library, Pencil } from "lucide-react";
 
 const STAGES = ["New", "Contacted", "Discovery booked", "Proposal sent", "Negotiating", "Won", "Lost"];
 const FUNNEL = ["New", "Contacted", "Discovery booked", "Proposal sent", "Negotiating", "Won"];
@@ -23,8 +23,248 @@ const normalizeTag = (s) => (s || "")
   .replace(/\s+/g, " ")
   .replace(/^[\s.,;:!?-]+|[\s.,;:!?-]+$/g, "")
   .trim();
+const dedupeByNormalized = (list) => {
+  const seen = new Set();
+  const out = [];
+  for (const value of list || []) {
+    const clean = String(value || "").trim();
+    const key = normalizeTag(clean);
+    if (!clean || !key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean);
+  }
+  return out;
+};
 const lastTouchAt = (a) => Math.max(...a.timeline.map((t) => t.at), a.createdAt || 0);
 const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : 0);
+const dtag = (t) => {
+  const c = DEAL_COLOR[t] || "#8a8f84";
+  return { background: c + "1f", color: c };
+};
+const buildLibraryMap = (tags) => {
+  const map = { angle: new Map(), problem: new Map() };
+  (tags || []).forEach((t) => {
+    const key = normalizeTag(t.label);
+    if (!key) return;
+    map[t.kind].set(key, t.label);
+  });
+  return map;
+};
+const mergeTagText = (text, label) => {
+  const labels = dedupeByNormalized([...splitTags(text), label]);
+  return labels.join(", ");
+};
+const removeTagText = (text, label) => {
+  const drop = normalizeTag(label);
+  const labels = splitTags(text).filter((x) => normalizeTag(x) !== drop);
+  return dedupeByNormalized(labels).join(", ");
+};
+
+function Rank({ r, max, color }) {
+  return (
+    <div className="lt-rank">
+      <div className="lt-rank-top"><span className="lt-rank-l">{r.tag}</span><span className="lt-rank-r">{r.signalCount} {r.signalCount === 1 ? "signal" : "signals"} · {r.dealCount} {r.dealCount === 1 ? "deal" : "deals"}{r.advDeals > 0 && <> · <b>{r.advDeals} advancing</b></>}</span></div>
+      <div className="lt-track2"><div className="lt-fill2" style={{ width: `${(r.signalCount / max) * 100}%`, background: color }} /></div>
+    </div>
+  );
+}
+
+function LibraryTagInput({ value, onChange, onAdd, placeholder }) {
+  return (
+    <div className="lt-lib-add">
+      <input className="lt-in" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} onKeyDown={(e) => { if (e.key === "Enter") onAdd(); }} />
+      <button className="lt-btn" onClick={onAdd}><Plus size={13} /> Add</button>
+    </div>
+  );
+}
+
+function LibraryPanel({
+  title,
+  kind,
+  tags,
+  addValue,
+  setAddValue,
+  onAdd,
+  onRename,
+  onDelete,
+}) {
+  return (
+    <section className="lt-card lt-lib-panel">
+      <div className="lt-sec-h" style={{ marginBottom: 10 }}>
+        <div className="lt-sec-t" style={{ fontSize: 18 }}>{title}</div>
+      </div>
+      {tags.length > 0 ? (
+        <div className="lt-lib-list">
+          {tags.map((tag) => (
+            <div className="lt-lib-row" key={tag.id}>
+              <span className={`lt-tg ${kind === "angle" ? "angle" : "problem"}`}>{tag.label}</span>
+              <div className="lt-actions" style={{ marginLeft: "auto" }}>
+                <button className="lt-btn" onClick={() => onRename(tag)}><Pencil size={12} /> Rename</button>
+                <button className="lt-btn danger" onClick={() => onDelete(tag)}><Trash2 size={12} /> Delete</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : <p className="lt-noins">No {kind} tags yet.</p>}
+      <LibraryTagInput value={addValue} onChange={setAddValue} onAdd={onAdd} placeholder={`Add ${kind} tag`} />
+    </section>
+  );
+}
+
+function StagedCard({
+  s,
+  accts,
+  tags,
+  editStaged,
+  editStContact,
+  addStContact,
+  rmStContact,
+  dropStaged,
+  toggleStagedLibraryTag,
+  missingLibraryTokens,
+}) {
+  const match = accts.find((a) => a.id === s.matchId);
+  const angleLib = tags.filter((t) => t.kind === "angle").map((t) => t.label);
+  const problemLib = tags.filter((t) => t.kind === "problem").map((t) => t.label);
+  const angleSet = new Set(splitTags(s.anglesText).map(normalizeTag));
+  const problemSet = new Set(splitTags(s.problemsText).map(normalizeTag));
+  const missingAngles = missingLibraryTokens(s.anglesText, "angle");
+  const missingProblems = missingLibraryTokens(s.problemsText, "problem");
+
+  return (
+    <div className="lt-scard">
+      <div className="lt-srow">
+        {match ? <span className="lt-tag exist">↳ updates {match.name}</span> : <span className="lt-tag new">+ new account</span>}
+        <select className="lt-sel" value={s.matchId || ""} onChange={(e) => editStaged(s.id, "matchId", e.target.value || null)} style={{ marginLeft: "auto" }}>
+          <option value="">New account</option>{accts.map((a) => <option key={a.id} value={a.id}>↳ {a.name}</option>)}
+        </select>
+        <button className="lt-btn danger" onClick={() => dropStaged(s.id)}><X size={13} /></button>
+      </div>
+      <div className="lt-grid">
+        <div className="lt-f"><label>Account / Org</label><input className="lt-in" value={s.name} onChange={(e) => editStaged(s.id, "name", e.target.value)} /></div>
+        <div className="lt-f"><label>Deal type</label><select className="lt-sel" style={{ width: "100%" }} value={s.dealType} onChange={(e) => editStaged(s.id, "dealType", e.target.value)}>{DEAL_TYPES.map((x) => <option key={x}>{x}</option>)}</select></div>
+      </div>
+      <div className="lt-f full" style={{ marginTop: 9 }}>
+        <label>Contacts</label>
+        {s.contacts.map((c) => (
+          <div className="lt-contact" key={c.id}>
+            <input className="lt-in" placeholder="Name" value={c.name} onChange={(e) => editStContact(s.id, c.id, "name", e.target.value)} />
+            <input className="lt-in" placeholder="Role" value={c.role} onChange={(e) => editStContact(s.id, c.id, "role", e.target.value)} />
+            <input className="lt-in mono" placeholder="email / handle" value={c.contact} onChange={(e) => editStContact(s.id, c.id, "contact", e.target.value)} />
+            <button className="lt-cx" onClick={() => rmStContact(s.id, c.id)}><X size={14} /></button>
+          </div>
+        ))}
+        <button className="lt-addc" onClick={() => addStContact(s.id)}><UserPlus size={13} /> Add contact</button>
+      </div>
+      <div className="lt-grid" style={{ marginTop: 9 }}>
+        <div className="lt-f"><label>Stage</label><select className="lt-sel" style={{ width: "100%" }} value={s.stage} onChange={(e) => editStaged(s.id, "stage", e.target.value)}>{STAGES.map((x) => <option key={x}>{x}</option>)}</select></div>
+        <div className="lt-f"><label>Source · Date</label><div style={{ display: "flex", gap: 6 }}><select className="lt-sel" value={s.source} onChange={(e) => editStaged(s.id, "source", e.target.value)}>{SOURCES.map((x) => <option key={x}>{x}</option>)}</select><input className="lt-in mono" value={s.lastContact} onChange={(e) => editStaged(s.id, "lastContact", e.target.value)} /></div></div>
+        <div className="lt-f full"><label>Sales read — what happened</label><textarea className="lt-in" value={s.summary} onChange={(e) => editStaged(s.id, "summary", e.target.value)} /></div>
+        <div className="lt-f full">
+          <label>Angle(s) pitched</label>
+          <input className="lt-in" value={s.anglesText} onChange={(e) => editStaged(s.id, "anglesText", e.target.value)} placeholder="comma-separated" />
+          {angleLib.length > 0 && <div className="lt-chiprow lt-chip-pick">{angleLib.map((label) => <button type="button" key={label} className={`lt-tg angle lt-chip-btn${angleSet.has(normalizeTag(label)) ? " selected" : ""}`} onClick={() => toggleStagedLibraryTag(s.id, "anglesText", label)}>{label}</button>)}</div>}
+          {missingAngles.length > 0 && <div className="lt-hint">new — added to your library when you log: {missingAngles.join(", ")}</div>}
+        </div>
+        <div className="lt-f full">
+          <label>Problem(s) that landed</label>
+          <input className="lt-in" value={s.problemsText} onChange={(e) => editStaged(s.id, "problemsText", e.target.value)} placeholder="comma-separated" />
+          {problemLib.length > 0 && <div className="lt-chiprow lt-chip-pick">{problemLib.map((label) => <button type="button" key={label} className={`lt-tg problem lt-chip-btn${problemSet.has(normalizeTag(label)) ? " selected" : ""}`} onClick={() => toggleStagedLibraryTag(s.id, "problemsText", label)}>{label}</button>)}</div>}
+          {missingProblems.length > 0 && <div className="lt-hint">new — added to your library when you log: {missingProblems.join(", ")}</div>}
+        </div>
+        <div className="lt-f full"><label>Next action</label><input className="lt-in" value={s.nextAction} onChange={(e) => editStaged(s.id, "nextAction", e.target.value)} /></div>
+      </div>
+    </div>
+  );
+}
+
+function Modal({
+  a,
+  setModalId,
+  editAcct,
+  editContact,
+  rmContact,
+  addContact,
+  anglesOf,
+  problemsOf,
+  openRaw,
+  setOpenRaw,
+  noteDraft,
+  setNoteDraft,
+  addNote,
+  deleteAcct,
+}) {
+  const idx = STAGES.indexOf(a.stage);
+  const ordered = [...a.timeline].sort((x, y) => y.at - x.at);
+  const angles = anglesOf(a);
+  const problems = problemsOf(a);
+
+  return (
+    <div className="lt-overlay" onClick={() => setModalId(null)}>
+      <div className="lt-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="lt-mh">
+          <div>
+            <div className="nm">{a.name}</div>
+            <div className="row">
+              <span className="lt-dtag" style={dtag(a.dealType)}>{a.dealType}</span>
+              <span className="lt-pill" style={{ background: STAGE_COLOR[a.stage] }}>{a.stage}</span>
+              <span className="lt-tsrc">{a.timeline.length} touches · last {fmt(lastTouchAt(a))}</span>
+            </div>
+          </div>
+          <button className="lt-mx" onClick={() => setModalId(null)}><X size={18} /></button>
+        </div>
+        <div className="lt-mb">
+          <div className="lt-prog">{FUNNEL.map((st, i) => <div key={st} className="lt-seg" style={{ background: a.stage === "Lost" ? "#e7d3d3" : i <= idx ? STAGE_COLOR[a.stage] : "#e7e0d0" }} title={st} />)}</div>
+          <div className="lt-fields">
+            <div className="lt-f"><label>Account / Org</label><input className="lt-in" value={a.name} onChange={(e) => editAcct(a.id, "name", e.target.value)} /></div>
+            <div className="lt-f"><label>Deal type</label><select className="lt-sel" style={{ width: "100%" }} value={a.dealType} onChange={(e) => editAcct(a.id, "dealType", e.target.value)}>{DEAL_TYPES.map((x) => <option key={x}>{x}</option>)}</select></div>
+            <div className="lt-f"><label>Stage</label><select className="lt-sel" style={{ width: "100%" }} value={a.stage} onChange={(e) => editAcct(a.id, "stage", e.target.value)}>{STAGES.map((x) => <option key={x}>{x}</option>)}</select></div>
+            <div className="lt-na"><label>Next action</label><input className="lt-in" value={a.nextAction} onChange={(e) => editAcct(a.id, "nextAction", e.target.value)} placeholder="—" /></div>
+          </div>
+          <div className="lt-block">
+            <p className="lt-block-h">Contacts</p>
+            {a.contacts.map((c) => (
+              <div className="lt-contact" key={c.id}>
+                <input className="lt-in" placeholder="Name" value={c.name} onChange={(e) => editContact(a.id, c.id, "name", e.target.value)} />
+                <input className="lt-in" placeholder="Role" value={c.role} onChange={(e) => editContact(a.id, c.id, "role", e.target.value)} />
+                <input className="lt-in mono" placeholder="email / handle" value={c.contact} onChange={(e) => editContact(a.id, c.id, "contact", e.target.value)} />
+                <button className="lt-cx" onClick={() => rmContact(a.id, c.id)}><X size={14} /></button>
+              </div>
+            ))}
+            <button className="lt-addc" onClick={() => addContact(a.id)}><UserPlus size={13} /> Add contact</button>
+          </div>
+          {(angles.length > 0 || problems.length > 0) && (
+            <div className="lt-block">
+              <p className="lt-block-h">What&apos;s been pitched · what&apos;s landed</p>
+              <div className="lt-chiprow">{angles.map((x) => <span className="lt-tg angle" key={"a" + x}>{x}</span>)}{problems.map((x) => <span className="lt-tg problem" key={"p" + x}>{x}</span>)}</div>
+            </div>
+          )}
+          <p className="lt-tl-h">Timeline · {a.timeline.length} {a.timeline.length === 1 ? "entry" : "entries"}</p>
+          <div className="lt-tl">
+            {ordered.map((t) => {
+              const rk = a.id + t.id;
+              return (
+                <div className="lt-touch" key={t.id}>
+                  <span className="lt-dot" style={{ background: STAGE_COLOR[t.stage] || "#8a8f84" }} />
+                  <div className="lt-tmeta"><span className="lt-tdate">{fmt(t.at)}</span><span className="lt-tstage" style={{ background: STAGE_COLOR[t.stage] }}>{t.stage}</span><span className="lt-tsrc">{t.source}</span></div>
+                  <div className="lt-tsum">{t.summary || <em style={{ color: "var(--faint)" }}>no read</em>}</div>
+                  {(t.angles?.length > 0 || t.problems?.length > 0) && <div className="lt-tchips">{(t.angles || []).map((x) => <span className="lt-tg angle" key={"a" + x}>{x}</span>)}{(t.problems || []).map((x) => <span className="lt-tg problem" key={"p" + x}>{x}</span>)}</div>}
+                  {t.nextAction && <div className="lt-tnext"><CornerDownRight size={13} style={{ marginTop: 2, flexShrink: 0 }} /> {t.nextAction}</div>}
+                  {t.rawText && (<><button className="lt-raw-toggle" onClick={() => setOpenRaw((o) => ({ ...o, [rk]: !o[rk] }))}><FileText size={11} /> {openRaw[rk] ? "Hide original" : "View original"}</button>{openRaw[rk] && <div className="lt-raw">{t.rawText}</div>}</>)}
+                </div>
+              );
+            })}
+          </div>
+          <div className="lt-addnote">
+            <input className="lt-in" placeholder="Add a quick note to the timeline…" value={noteDraft[a.id] || ""} onChange={(e) => setNoteDraft((d) => ({ ...d, [a.id]: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter") addNote(a.id); }} />
+            <button className="lt-mini" onClick={() => addNote(a.id)}><Plus size={14} /> Note</button>
+          </div>
+          <div className="lt-cdel"><button className="lt-btn danger" onClick={() => deleteAcct(a.id)}><Trash2 size={13} /> Delete account</button></div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function Pipeline() {
   const [view, setView] = useState("intake");
@@ -34,6 +274,9 @@ export default function Pipeline() {
   const [err, setErr] = useState("");
   const [staged, setStaged] = useState([]);
   const [accts, setAccts] = useState([]);
+  const [tags, setTags] = useState([]);
+  const [addAngle, setAddAngle] = useState("");
+  const [addProblem, setAddProblem] = useState("");
   const [ready, setReady] = useState(false);
   const [drag, setDrag] = useState(false);
   const [toast, setToast] = useState("");
@@ -43,15 +286,34 @@ export default function Pipeline() {
   const [q, setQ] = useState("");
   const fileRef = useRef(null);
   const acctsRef = useRef([]);
+  const tagsRef = useRef([]);
   const timers = useRef({});
 
   useEffect(() => { acctsRef.current = accts; }, [accts]);
+  useEffect(() => { tagsRef.current = tags; }, [tags]);
 
   const refetch = useCallback(async () => {
-    try { const r = await fetch("/api/accounts"); const d = await r.json(); if (r.ok) setAccts(d.accounts || []); } catch (e) {}
+    try {
+      const r = await fetch("/api/accounts");
+      const d = await r.json();
+      if (r.ok) setAccts(d.accounts || []);
+    } catch (e) {}
   }, []);
 
-  useEffect(() => { (async () => { await refetch(); setReady(true); })(); }, [refetch]);
+  const refetchTags = useCallback(async () => {
+    try {
+      const r = await fetch("/api/tags");
+      const d = await r.json();
+      if (r.ok) setTags(d.tags || []);
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      await Promise.all([refetch(), refetchTags()]);
+      setReady(true);
+    })();
+  }, [refetch, refetchTags]);
 
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2200); };
 
@@ -118,8 +380,8 @@ export default function Pipeline() {
         lastContact: p.lastContact || today(),
         nextAction: p.nextAction || "",
         summary: p.summary || "",
-        anglesText: (p.angles || []).join(", "),
-        problemsText: (p.problems || []).join(", "),
+        anglesText: dedupeByNormalized(p.angles || []).join(", "),
+        problemsText: dedupeByNormalized(p.problems || []).join(", "),
         rawText: raw,
       }));
       if (rows.length === 0) setErr("No opportunity found in that content.");
@@ -136,6 +398,54 @@ export default function Pipeline() {
   const rmStContact = (sid, cid) => setStaged((s) => s.map((r) => (r.id === sid ? { ...r, contacts: r.contacts.filter((c) => c.id !== cid) } : r)));
   const dropStaged = (id) => setStaged((s) => s.filter((r) => r.id !== id));
 
+  const toggleStagedLibraryTag = (sid, key, label) => {
+    setStaged((prev) => prev.map((r) => {
+      if (r.id !== sid) return r;
+      const has = splitTags(r[key]).some((x) => normalizeTag(x) === normalizeTag(label));
+      return { ...r, [key]: has ? removeTagText(r[key], label) : mergeTagText(r[key], label) };
+    }));
+  };
+
+  const upsertTag = async (kind, label) => {
+    const clean = String(label || "").trim();
+    if (!clean) return false;
+    const existing = tagsRef.current.find((t) => t.kind === kind && normalizeTag(t.label) === normalizeTag(clean));
+    if (existing) return true;
+    try {
+      const r = await fetch("/api/tags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, label: clean }),
+      });
+      return r.ok;
+    } catch {
+      return false;
+    }
+  };
+
+  const upsertMissingFromStagedRows = async (rows) => {
+    const map = buildLibraryMap(tagsRef.current);
+    const work = [];
+
+    rows.forEach((s) => {
+      splitTags(s.anglesText).forEach((label) => {
+        const key = normalizeTag(label);
+        if (!key || map.angle.has(key)) return;
+        map.angle.set(key, label);
+        work.push({ kind: "angle", label });
+      });
+      splitTags(s.problemsText).forEach((label) => {
+        const key = normalizeTag(label);
+        if (!key || map.problem.has(key)) return;
+        map.problem.set(key, label);
+        work.push({ kind: "problem", label });
+      });
+    });
+
+    for (const item of work) await upsertTag(item.kind, item.label);
+    if (work.length > 0) await refetchTags();
+  };
+
   const commit = async () => {
     if (staged.length === 0) return;
     setBusy(true);
@@ -146,7 +456,17 @@ export default function Pipeline() {
 
       for (const s of staged) {
         const cleanContacts = s.contacts.filter((c) => c.name.trim() || c.contact.trim());
-        const touch = { id: uid("t"), at: new Date(s.lastContact + "T12:00:00").getTime() || Date.now(), source: s.source, stage: s.stage, summary: s.summary, nextAction: s.nextAction, rawText: s.rawText, angles: splitTags(s.anglesText), problems: splitTags(s.problemsText) };
+        const touch = {
+          id: uid("t"),
+          at: new Date(s.lastContact + "T12:00:00").getTime() || Date.now(),
+          source: s.source,
+          stage: s.stage,
+          summary: s.summary,
+          nextAction: s.nextAction,
+          rawText: s.rawText,
+          angles: dedupeByNormalized(splitTags(s.anglesText)),
+          problems: dedupeByNormalized(splitTags(s.problemsText)),
+        };
         const existing = s.matchId ? existingById.get(s.matchId) : null;
 
         if (!existing) {
@@ -172,8 +492,11 @@ export default function Pipeline() {
         await fetch("/api/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(created) });
       }
 
+      await upsertMissingFromStagedRows(staged);
       await refetch();
-      flash(`${staged.length} logged`); setStaged([]); setView("dashboard");
+      flash(`${staged.length} logged`);
+      setStaged([]);
+      setView("dashboard");
     } catch (e) { setErr("Couldn't save — check your connection and try again."); }
     finally { setBusy(false); }
   };
@@ -193,8 +516,82 @@ export default function Pipeline() {
     setAccts((p) => p.filter((a) => a.id !== id)); setModalId(null);
   };
 
+  const addLibraryTag = async (kind, value, reset) => {
+    const clean = value.trim();
+    if (!clean) return;
+    const ok = await upsertTag(kind, clean);
+    if (ok) {
+      reset("");
+      await refetchTags();
+      flash("Library updated");
+    }
+  };
+
+  const renameLibraryTag = async (tag) => {
+    const next = window.prompt(
+      "Rename tag. If you rename to an existing label, this merges both tags. Renames update every logged touch.",
+      tag.label
+    );
+    if (!next || !next.trim() || next.trim() === tag.label) return;
+    const r = await fetch(`/api/tags/${tag.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: next.trim() }),
+    });
+    if (!r.ok) {
+      flash("Rename failed");
+      return;
+    }
+    await Promise.all([refetch(), refetchTags()]);
+    flash("Tag renamed");
+  };
+
+  const deleteLibraryTag = async (tag) => {
+    const yes = window.confirm("Delete this tag from the library? This strips it from all timeline history.");
+    if (!yes) return;
+    const r = await fetch(`/api/tags/${tag.id}`, { method: "DELETE" });
+    if (!r.ok) {
+      flash("Delete failed");
+      return;
+    }
+    await Promise.all([refetch(), refetchTags()]);
+    flash("Tag deleted");
+  };
+
+  const importFromHistory = async () => {
+    const map = buildLibraryMap(tags);
+    const work = [];
+
+    accts.forEach((a) => {
+      a.timeline.forEach((t) => {
+        (t.angles || []).forEach((label) => {
+          const key = normalizeTag(label);
+          if (!key || map.angle.has(key)) return;
+          map.angle.set(key, label);
+          work.push({ kind: "angle", label });
+        });
+        (t.problems || []).forEach((label) => {
+          const key = normalizeTag(label);
+          if (!key || map.problem.has(key)) return;
+          map.problem.set(key, label);
+          work.push({ kind: "problem", label });
+        });
+      });
+    });
+
+    for (const item of work) await upsertTag(item.kind, item.label);
+    await refetchTags();
+    flash(work.length ? `${work.length} tags imported` : "No new tags to import");
+  };
+
   const anglesOf = (a) => uniq(a.timeline.flatMap((t) => t.angles || []));
   const problemsOf = (a) => uniq(a.timeline.flatMap((t) => t.problems || []));
+
+  const missingLibraryTokens = (text, kind) => {
+    const map = buildLibraryMap(tags);
+    const target = kind === "angle" ? map.angle : map.problem;
+    return dedupeByNormalized(splitTags(text).filter((token) => !target.has(normalizeTag(token))));
+  };
 
   // ---------- stats ----------
   const now = Date.now();
@@ -227,10 +624,11 @@ export default function Pipeline() {
       a.timeline.forEach((t) => {
         const tagsInTouch = new Set();
         (t[kind] || []).forEach((raw) => {
-          const key = normalizeTag(raw);
+          const clean = String(raw || "").trim();
+          const key = normalizeTag(clean);
           if (!key) return;
 
-          map[key] = map[key] || { tag: raw.trim(), signalCount: 0, dealCount: 0, advDeals: 0 };
+          map[key] = map[key] || { tag: clean, signalCount: 0, dealCount: 0, advDeals: 0 };
           tagsInDeal.add(key);
           if (!tagsInTouch.has(key)) {
             map[key].signalCount++;
@@ -255,132 +653,18 @@ export default function Pipeline() {
 
   const exportCSV = () => {
     const head = ["Account", "Deal type", "Contacts", "Stage", "Next action", "Angles pitched", "Problems landed", "Touches", "Last touch", "Latest read"];
-    const rows = accts.map((a) => { const last = a.timeline[a.timeline.length - 1] || {}; return [a.name, a.dealType, a.contacts.map((c) => `${c.name}${c.role ? ` (${c.role})` : ""}`).join("; "), a.stage, a.nextAction, anglesOf(a).join("; "), problemsOf(a).join("; "), a.timeline.length, new Date(lastTouchAt(a)).toISOString().slice(0, 10), last.summary || ""]; });
+    const rows = accts.map((a) => {
+      const last = a.timeline[a.timeline.length - 1] || {};
+      return [a.name, a.dealType, a.contacts.map((c) => `${c.name}${c.role ? ` (${c.role})` : ""}`).join("; "), a.stage, a.nextAction, anglesOf(a).join("; "), problemsOf(a).join("; "), a.timeline.length, new Date(lastTouchAt(a)).toISOString().slice(0, 10), last.summary || ""];
+    });
     const csv = [head, ...rows].map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
     const b = new Blob([csv], { type: "text/csv" }); const u = URL.createObjectURL(b); const el = document.createElement("a"); el.href = u; el.download = "clarivue-pipeline.csv"; el.click(); URL.revokeObjectURL(u);
   };
 
   const filtered = accts.filter((a) => (a.name + " " + a.dealType + " " + a.contacts.map((c) => c.name + c.role).join(" ")).toLowerCase().includes(q.toLowerCase()));
-  const dtag = (t) => { const c = DEAL_COLOR[t] || "#8a8f84"; return { background: c + "1f", color: c }; };
-
-  const Rank = ({ r, max, color }) => (
-    <div className="lt-rank">
-      <div className="lt-rank-top"><span className="lt-rank-l">{r.tag}</span><span className="lt-rank-r">{r.signalCount} {r.signalCount === 1 ? "signal" : "signals"} · {r.dealCount} {r.dealCount === 1 ? "deal" : "deals"}{r.advDeals > 0 && <> · <b>{r.advDeals} advancing</b></>}</span></div>
-      <div className="lt-track2"><div className="lt-fill2" style={{ width: `${(r.signalCount / max) * 100}%`, background: color }} /></div>
-    </div>
-  );
-
-  const StagedCard = ({ s }) => {
-    const match = accts.find((a) => a.id === s.matchId);
-    return (
-      <div className="lt-scard">
-        <div className="lt-srow">
-          {match ? <span className="lt-tag exist">↳ updates {match.name}</span> : <span className="lt-tag new">+ new account</span>}
-          <select className="lt-sel" value={s.matchId || ""} onChange={(e) => editStaged(s.id, "matchId", e.target.value || null)} style={{ marginLeft: "auto" }}>
-            <option value="">New account</option>{accts.map((a) => <option key={a.id} value={a.id}>↳ {a.name}</option>)}
-          </select>
-          <button className="lt-btn danger" onClick={() => dropStaged(s.id)}><X size={13} /></button>
-        </div>
-        <div className="lt-grid">
-          <div className="lt-f"><label>Account / Org</label><input className="lt-in" value={s.name} onChange={(e) => editStaged(s.id, "name", e.target.value)} /></div>
-          <div className="lt-f"><label>Deal type</label><select className="lt-sel" style={{ width: "100%" }} value={s.dealType} onChange={(e) => editStaged(s.id, "dealType", e.target.value)}>{DEAL_TYPES.map((x) => <option key={x}>{x}</option>)}</select></div>
-        </div>
-        <div className="lt-f full" style={{ marginTop: 9 }}>
-          <label>Contacts</label>
-          {s.contacts.map((c) => (
-            <div className="lt-contact" key={c.id}>
-              <input className="lt-in" placeholder="Name" value={c.name} onChange={(e) => editStContact(s.id, c.id, "name", e.target.value)} />
-              <input className="lt-in" placeholder="Role" value={c.role} onChange={(e) => editStContact(s.id, c.id, "role", e.target.value)} />
-              <input className="lt-in mono" placeholder="email / handle" value={c.contact} onChange={(e) => editStContact(s.id, c.id, "contact", e.target.value)} />
-              <button className="lt-cx" onClick={() => rmStContact(s.id, c.id)}><X size={14} /></button>
-            </div>
-          ))}
-          <button className="lt-addc" onClick={() => addStContact(s.id)}><UserPlus size={13} /> Add contact</button>
-        </div>
-        <div className="lt-grid" style={{ marginTop: 9 }}>
-          <div className="lt-f"><label>Stage</label><select className="lt-sel" style={{ width: "100%" }} value={s.stage} onChange={(e) => editStaged(s.id, "stage", e.target.value)}>{STAGES.map((x) => <option key={x}>{x}</option>)}</select></div>
-          <div className="lt-f"><label>Source · Date</label><div style={{ display: "flex", gap: 6 }}><select className="lt-sel" value={s.source} onChange={(e) => editStaged(s.id, "source", e.target.value)}>{SOURCES.map((x) => <option key={x}>{x}</option>)}</select><input className="lt-in mono" value={s.lastContact} onChange={(e) => editStaged(s.id, "lastContact", e.target.value)} /></div></div>
-          <div className="lt-f full"><label>Sales read — what happened</label><textarea className="lt-in" value={s.summary} onChange={(e) => editStaged(s.id, "summary", e.target.value)} /></div>
-          <div className="lt-f full"><label>Angle(s) pitched</label><input className="lt-in" value={s.anglesText} onChange={(e) => editStaged(s.id, "anglesText", e.target.value)} placeholder="comma-separated" /></div>
-          <div className="lt-f full"><label>Problem(s) that landed</label><input className="lt-in" value={s.problemsText} onChange={(e) => editStaged(s.id, "problemsText", e.target.value)} placeholder="comma-separated" /></div>
-          <div className="lt-f full"><label>Next action</label><input className="lt-in" value={s.nextAction} onChange={(e) => editStaged(s.id, "nextAction", e.target.value)} /></div>
-        </div>
-      </div>
-    );
-  };
-
-  const Modal = ({ a }) => {
-    const idx = STAGES.indexOf(a.stage);
-    const ordered = [...a.timeline].sort((x, y) => y.at - x.at);
-    const angles = anglesOf(a), problems = problemsOf(a);
-    return (
-      <div className="lt-overlay" onClick={() => setModalId(null)}>
-        <div className="lt-modal" onClick={(e) => e.stopPropagation()}>
-          <div className="lt-mh">
-            <div>
-              <div className="nm">{a.name}</div>
-              <div className="row">
-                <span className="lt-dtag" style={dtag(a.dealType)}>{a.dealType}</span>
-                <span className="lt-pill" style={{ background: STAGE_COLOR[a.stage] }}>{a.stage}</span>
-                <span className="lt-tsrc">{a.timeline.length} touches · last {fmt(lastTouchAt(a))}</span>
-              </div>
-            </div>
-            <button className="lt-mx" onClick={() => setModalId(null)}><X size={18} /></button>
-          </div>
-          <div className="lt-mb">
-            <div className="lt-prog">{FUNNEL.map((st, i) => <div key={st} className="lt-seg" style={{ background: a.stage === "Lost" ? "#e7d3d3" : i <= idx ? STAGE_COLOR[a.stage] : "#e7e0d0" }} title={st} />)}</div>
-            <div className="lt-fields">
-              <div className="lt-f"><label>Account / Org</label><input className="lt-in" value={a.name} onChange={(e) => editAcct(a.id, "name", e.target.value)} /></div>
-              <div className="lt-f"><label>Deal type</label><select className="lt-sel" style={{ width: "100%" }} value={a.dealType} onChange={(e) => editAcct(a.id, "dealType", e.target.value)}>{DEAL_TYPES.map((x) => <option key={x}>{x}</option>)}</select></div>
-              <div className="lt-f"><label>Stage</label><select className="lt-sel" style={{ width: "100%" }} value={a.stage} onChange={(e) => editAcct(a.id, "stage", e.target.value)}>{STAGES.map((x) => <option key={x}>{x}</option>)}</select></div>
-              <div className="lt-na"><label>Next action</label><input className="lt-in" value={a.nextAction} onChange={(e) => editAcct(a.id, "nextAction", e.target.value)} placeholder="—" /></div>
-            </div>
-            <div className="lt-block">
-              <p className="lt-block-h">Contacts</p>
-              {a.contacts.map((c) => (
-                <div className="lt-contact" key={c.id}>
-                  <input className="lt-in" placeholder="Name" value={c.name} onChange={(e) => editContact(a.id, c.id, "name", e.target.value)} />
-                  <input className="lt-in" placeholder="Role" value={c.role} onChange={(e) => editContact(a.id, c.id, "role", e.target.value)} />
-                  <input className="lt-in mono" placeholder="email / handle" value={c.contact} onChange={(e) => editContact(a.id, c.id, "contact", e.target.value)} />
-                  <button className="lt-cx" onClick={() => rmContact(a.id, c.id)}><X size={14} /></button>
-                </div>
-              ))}
-              <button className="lt-addc" onClick={() => addContact(a.id)}><UserPlus size={13} /> Add contact</button>
-            </div>
-            {(angles.length > 0 || problems.length > 0) && (
-              <div className="lt-block">
-                <p className="lt-block-h">What&apos;s been pitched · what&apos;s landed</p>
-                <div className="lt-chiprow">{angles.map((x) => <span className="lt-tg angle" key={"a" + x}>{x}</span>)}{problems.map((x) => <span className="lt-tg problem" key={"p" + x}>{x}</span>)}</div>
-              </div>
-            )}
-            <p className="lt-tl-h">Timeline · {a.timeline.length} {a.timeline.length === 1 ? "entry" : "entries"}</p>
-            <div className="lt-tl">
-              {ordered.map((t) => {
-                const rk = a.id + t.id;
-                return (
-                  <div className="lt-touch" key={t.id}>
-                    <span className="lt-dot" style={{ background: STAGE_COLOR[t.stage] || "#8a8f84" }} />
-                    <div className="lt-tmeta"><span className="lt-tdate">{fmt(t.at)}</span><span className="lt-tstage" style={{ background: STAGE_COLOR[t.stage] }}>{t.stage}</span><span className="lt-tsrc">{t.source}</span></div>
-                    <div className="lt-tsum">{t.summary || <em style={{ color: "var(--faint)" }}>no read</em>}</div>
-                    {(t.angles?.length > 0 || t.problems?.length > 0) && <div className="lt-tchips">{(t.angles || []).map((x) => <span className="lt-tg angle" key={"a" + x}>{x}</span>)}{(t.problems || []).map((x) => <span className="lt-tg problem" key={"p" + x}>{x}</span>)}</div>}
-                    {t.nextAction && <div className="lt-tnext"><CornerDownRight size={13} style={{ marginTop: 2, flexShrink: 0 }} /> {t.nextAction}</div>}
-                    {t.rawText && (<><button className="lt-raw-toggle" onClick={() => setOpenRaw((o) => ({ ...o, [rk]: !o[rk] }))}><FileText size={11} /> {openRaw[rk] ? "Hide original" : "View original"}</button>{openRaw[rk] && <div className="lt-raw">{t.rawText}</div>}</>)}
-                  </div>
-                );
-              })}
-            </div>
-            <div className="lt-addnote">
-              <input className="lt-in" placeholder="Add a quick note to the timeline…" value={noteDraft[a.id] || ""} onChange={(e) => setNoteDraft((d) => ({ ...d, [a.id]: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter") addNote(a.id); }} />
-              <button className="lt-mini" onClick={() => addNote(a.id)}><Plus size={14} /> Note</button>
-            </div>
-            <div className="lt-cdel"><button className="lt-btn danger" onClick={() => deleteAcct(a.id)}><Trash2 size={13} /> Delete account</button></div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
   const modalAcct = accts.find((a) => a.id === modalId);
+  const angleTags = tags.filter((t) => t.kind === "angle");
+  const problemTags = tags.filter((t) => t.kind === "problem");
 
   return (
     <div className="lt">
@@ -398,6 +682,7 @@ export default function Pipeline() {
           <button className={`lt-tab${view === "intake" ? " active" : ""}`} onClick={() => setView("intake")}><FileInput size={15} /> Intake{staged.length > 0 && <span className="b">{staged.length}</span>}</button>
           <button className={`lt-tab${view === "dashboard" ? " active" : ""}`} onClick={() => setView("dashboard")}><LayoutGrid size={15} /> Dashboard</button>
           <button className={`lt-tab${view === "accounts" ? " active" : ""}`} onClick={() => setView("accounts")}><Table2 size={15} /> Accounts<span className="b">{accts.length}</span></button>
+          <button className={`lt-tab${view === "library" ? " active" : ""}`} onClick={() => setView("library")}><Library size={15} /> Library<span className="b">{tags.length}</span></button>
         </nav>
 
         {view === "intake" && (
@@ -419,7 +704,7 @@ export default function Pipeline() {
                   <div className="lt-sec-t"><Check size={18} color="#bf4f2a" /> {staged.length} ready <small>check match, deal type, angle &amp; problem — then log</small></div>
                   <div className="lt-actions"><button className="lt-btn danger" onClick={() => setStaged([])}><X size={14} /> Discard</button><button className="lt-btn commit" onClick={commit} disabled={busy}><Check size={14} /> {busy ? "Saving…" : "Log → Dashboard"}</button></div>
                 </div>
-                {staged.map((s) => <StagedCard key={s.id} s={s} />)}
+                {staged.map((s) => <StagedCard key={s.id} s={s} accts={accts} tags={tags} editStaged={editStaged} editStContact={editStContact} addStContact={addStContact} rmStContact={rmStContact} dropStaged={dropStaged} toggleStagedLibraryTag={toggleStagedLibraryTag} missingLibraryTokens={missingLibraryTokens} />)}
               </section>
             ) : <p style={{ textAlign: "center", color: "var(--faint)", fontSize: 13, marginTop: 8 }}>Paste something above and hit Read &amp; Log — extracted entries show here for a quick check before they hit your pipeline.</p>}
           </>
@@ -524,8 +809,23 @@ export default function Pipeline() {
             )}
           </section>
         )}
+
+        {view === "library" && (
+          <section>
+            <div className="lt-sec-h">
+              <div className="lt-sec-t">Messaging Library <small>canonical tags used across extraction and dashboard rollups</small></div>
+              <div className="lt-actions">
+                <button className="lt-btn" onClick={importFromHistory}><Download size={13} /> Import from history</button>
+              </div>
+            </div>
+            <div className="lt-lib-grid">
+              <LibraryPanel title="Angles" kind="angle" tags={angleTags} addValue={addAngle} setAddValue={setAddAngle} onAdd={() => addLibraryTag("angle", addAngle, setAddAngle)} onRename={renameLibraryTag} onDelete={deleteLibraryTag} />
+              <LibraryPanel title="Problems" kind="problem" tags={problemTags} addValue={addProblem} setAddValue={setAddProblem} onAdd={() => addLibraryTag("problem", addProblem, setAddProblem)} onRename={renameLibraryTag} onDelete={deleteLibraryTag} />
+            </div>
+          </section>
+        )}
       </div>
-      {modalAcct && <Modal a={modalAcct} />}
+      {modalAcct && <Modal a={modalAcct} setModalId={setModalId} editAcct={editAcct} editContact={editContact} rmContact={rmContact} addContact={addContact} anglesOf={anglesOf} problemsOf={problemsOf} openRaw={openRaw} setOpenRaw={setOpenRaw} noteDraft={noteDraft} setNoteDraft={setNoteDraft} addNote={addNote} deleteAcct={deleteAcct} />}
       {toast && <div className="lt-toast"><Check size={15} /> {toast}</div>}
     </div>
   );
